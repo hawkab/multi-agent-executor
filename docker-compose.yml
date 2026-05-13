@@ -1,0 +1,236 @@
+services:
+  jira-db:
+    image: postgres:17
+    container_name: jira-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: jira
+      POSTGRES_USER: jira
+      POSTGRES_PASSWORD: jira_secret
+      TZ: Europe/Moscow
+    volumes:
+      - jira_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jira -d jira"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - aiops
+
+  jira:
+    image: atlassian/jira-software:latest
+    container_name: jira
+    restart: unless-stopped
+    depends_on:
+      jira-db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Europe/Moscow
+      JVM_MINIMUM_MEMORY: 1024m
+      JVM_MAXIMUM_MEMORY: 2048m
+      ATL_TOMCAT_PORT: 8080
+      ATL_JDBC_URL: jdbc:postgresql://jira-db:5432/jira
+      ATL_JDBC_USER: jira
+      ATL_JDBC_PASSWORD: jira_secret
+      ATL_DB_DRIVER: org.postgresql.Driver
+      ATL_DB_TYPE: postgres72
+      ATL_DB_SCHEMA_NAME: public
+      ATL_FORCE_CFG_UPDATE: "true"
+    volumes:
+      - jira_data:/var/atlassian/application-data/jira
+    networks:
+      - aiops
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: aiops
+      RABBITMQ_DEFAULT_PASS: aiops_secret
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - aiops
+
+  ollama:
+    image: ollama/ollama:0.18.3
+    container_name: ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      TZ: Europe/Moscow
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - aiops
+
+  jira-bot:
+    build:
+      context: ./services/jira-bot
+      dockerfile: Dockerfile
+    container_name: jira-bot
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      jira:
+        condition: service_started
+    environment:
+      TZ: Europe/Moscow
+      APP_NAME: jira-bot
+      PYTHONUNBUFFERED: "1"
+
+      JIRA_BASE_URL: http://jira:8080
+      JIRA_USERNAME: ${JIRA_USERNAME:-agent-orchestrator}
+      JIRA_PASSWORD: ${JIRA_PASSWORD:-agent-orchestrator}
+
+      AMQP_URL: amqp://aiops:aiops_secret@rabbitmq:5672/
+      AMQP_EXCHANGE: aiops.exchange
+      QUEUE_IN: jira.requests
+      ROUTING_KEY_OUT: guardian.requests
+
+      JIRA_INITIAL_STATUS_NAME: Сделать
+      JIRA_INITIAL_STATUS_CATEGORY_NAME: To Do
+      JIRA_IN_PROGRESS_STATUS_NAME: В работе
+      JIRA_WAITING_STATUS_NAME: Ожидание
+
+      JIRA_COMMENT_ON_TAKE: "true"
+      JIRA_FORWARD_STATUS_COMMENTS: "false"
+      JIRA_SECURITY_REVIEWER_LOGIN: ${JIRA_SECURITY_REVIEWER_LOGIN:-security-user}
+      SUPPRESS_SECONDS_AFTER_BOT_WRITE: "120"
+      JIRA_POLL_SECONDS: "20"
+      JIRA_MAX_RESULTS: "20"
+      JIRA_JQL: ${JIRA_JQL:-assignee = currentUser() AND statusCategory = "To Do" ORDER BY updated DESC}
+
+      WF_LABEL_GUARDIAN_REVIEW: aiops-guardian-review
+      WF_LABEL_APPROVED_FOR_AGENT: aiops-approved-for-agent
+      WF_LABEL_NEED_INFO: aiops-need-info
+      WF_LABEL_SECURITY_REVIEW: aiops-security-review
+      WF_LABEL_AGENT_REPLIED: aiops-agent-replied
+      WF_LABEL_AGENT_QUESTION: aiops-agent-question
+
+      ROUTING_KEY_DIRECT_AGENT: nanobot.requests
+      SECURITY_APPROVAL_PHRASE: "Согласовано, замечаний нет."
+      BOT_SECURITY_REVIEW_MARKER_PREFIX: "[BOT][WF][SECURITY_REVIEW]"
+      JIRA_BROWSER_BASE_URL: ${JIRA_BROWSER_BASE_URL:-http://localhost:8080}
+
+    volumes:
+      - ./services/jira-bot/app:/app
+    working_dir: /app
+    command: ["python", "-u", "app.py"]
+    networks:
+      - aiops
+
+  guardian:
+    build:
+      context: ./services/guardian
+      dockerfile: Dockerfile
+    container_name: guardian
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      TZ: Europe/Moscow
+      APP_NAME: guardian
+      PYTHONUNBUFFERED: "1"
+
+      AMQP_URL: amqp://aiops:aiops_secret@rabbitmq:5672/
+      AMQP_EXCHANGE: aiops.exchange
+      QUEUE_IN: guardian.requests
+
+      ROUTING_KEY_OK: nanobot.requests
+      ROUTING_KEY_COMMENTS: jira.comments
+      ROUTING_KEY_HUMAN_REVIEW: jira.human-review
+      ROUTING_KEY_STATUS: jira.status
+
+      GUARDIAN_MODE: rules+llm
+      GUARDIAN_ENABLE_LLM: "true"
+      GUARDIAN_RULES_PATH: /app/guardian_rules.json
+      GUARDIAN_LLM_TIMEOUT_SECONDS: "60"
+      OLLAMA_URL: http://ollama:11434/api/chat
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:14b}"
+      OLLAMA_TOKEN: ollama
+
+      SECURITY_APPENDIX_REQUIRED: "true"
+      GUARDIAN_APPROVED_COMMENT: "Согласовано, замечаний нет."
+    volumes:
+      - ./services/guardian/app:/app
+    working_dir: /app
+    command: ["python", "-u", "app.py"]
+    networks:
+      - aiops
+
+  nanobot:
+    build:
+      context: ./services/nanobot
+      dockerfile: Dockerfile
+    container_name: nanobot
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "18790:18790"
+      - "1234:1234"
+      - "80:80"
+      - "8081:8081"
+      - "5555:5555"
+
+    environment:
+      NANOBOT_WORKSPACE: /root/.nanobot/workspace
+    volumes:
+      - ./nanobot-config:/root/.nanobot
+      - ./services/nanobot:/app
+    command: ["gateway"]
+    entrypoint: ["/bin/sh", "/app/entrypoint.sh"]
+    networks:
+      - aiops
+
+  nanobot-cli:
+    build:
+      context: ./services/nanobot
+      dockerfile: Dockerfile
+    container_name: nanobot-cli
+    profiles:
+      - cli
+    depends_on:
+      ollama:
+        condition: service_started
+    command: ["status"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./nanobot-config:/root/.nanobot
+    networks:
+      - aiops
+
+networks:
+  aiops:
+    driver: bridge
+
+volumes:
+  jira_db_data:
+  jira_data:
+  rabbitmq_data:
+  ollama_data:
