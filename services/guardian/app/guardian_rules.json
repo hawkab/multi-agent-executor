@@ -1,0 +1,95 @@
+{
+  "version": "2026-03-29",
+  "rules": [
+    {
+      "id": "fs.rm-rf",
+      "severity": "critical",
+      "reason": "Обнаружены признаки массового удаления файлов или каталогов.",
+      "patterns": [
+        "\\brm\\s+-rf\\s+(/|/\\*|/var|/etc|~|\\*|\\.{1,2}|--no-preserve-root)",
+        "\\bfind\\b[^\\n]{0,200}\\s+-delete\\b",
+        "\\bdel\\s+/(s|q|f)\\b",
+        "\\bRemove-Item\\b[^\\n]{0,200}\\s+-Recurse\\b"
+      ]
+    },
+    {
+      "id": "db.drop",
+      "severity": "critical",
+      "reason": "Обнаружены признаки удаления объектов базы данных.",
+      "patterns": [
+        "\\bdrop\\s+(database|schema|table|column|user|role)\\b",
+        "\\btruncate\\s+table\\b",
+        "\\balter\\s+table\\b[^\\n]{0,200}\\bdrop\\s+column\\b"
+      ]
+    },
+    {
+      "id": "iam.user-create-or-privilege",
+      "severity": "critical",
+      "reason": "Обнаружены признаки создания пользователя или выдачи повышенных прав.",
+      "patterns": [
+        "\\bcreate\\s+user\\b",
+        "\\buseradd\\b",
+        "\\bgrant\\b[^\\n]{0,200}\\b(superuser|all privileges|admin|root)\\b",
+        "\\busermod\\b[^\\n]{0,120}\\s+-aG\\s+(sudo|wheel)\\b",
+        "\\bsudoers\\b",
+        "\\bWITH\\s+GRANT\\s+OPTION\\b"
+      ]
+    },
+    {
+      "id": "net.download-and-exec",
+      "severity": "critical",
+      "reason": "Обнаружены признаки скачивания и немедленного выполнения внешнего кода.",
+      "patterns": [
+        "\\bcurl\\b[^\\n]{0,200}\\|\\s*(bash|sh|zsh)\\b",
+        "\\bwget\\b[^\\n]{0,200}\\|\\s*(bash|sh|zsh)\\b",
+        "\\bInvoke-WebRequest\\b[^\\n]{0,200}\\|\\s*iex\\b",
+        "\\b(?:bash|sh|python3?|perl)\\s+<\\s*\\(\\s*curl\\b"
+      ]
+    },
+    {
+      "id": "infra.destroy",
+      "severity": "critical",
+      "reason": "Обнаружены признаки деструктивных инфраструктурных команд.",
+      "patterns": [
+        "\\bterraform\\s+destroy\\b",
+        "\\bkubectl\\s+delete\\b",
+        "\\bhelm\\s+uninstall\\b",
+        "\\bdocker\\s+system\\s+prune\\b",
+        "\\bdocker\\s+rm\\b[^\\n]{0,120}\\s+-f\\b"
+      ]
+    },
+    {
+      "id": "os.shutdown-or-disable-protection",
+      "severity": "critical",
+      "reason": "Обнаружены признаки отключения защиты или остановки системы.",
+      "patterns": [
+        "\\bshutdown\\b",
+        "\\breboot\\b",
+        "\\binit\\s+0\\b",
+        "\\bsetenforce\\s+0\\b",
+        "\\bufw\\s+disable\\b",
+        "\\biptables\\s+-F\\b"
+      ]
+    },
+    {
+      "id": "logs.wipe",
+      "severity": "high",
+      "reason": "Обнаружены признаки очистки логов или следов выполнения.",
+      "patterns": [
+        "\\bjournalctl\\b[^\\n]{0,200}\\s+--vacuum",
+        "\\brm\\s+-rf\\s+/var/log\\b",
+        "\\btruncate\\b[^\\n]{0,200}\\s+/var/log/"
+      ]
+    },
+    {
+      "id": "secrets.exfiltration",
+      "severity": "high",
+      "reason": "Обнаружены признаки выгрузки секретов или чувствительных данных.",
+      "patterns": [
+        "\\b(cat|grep)\\b[^\\n]{0,200}(\\.env|id_rsa|authorized_keys|shadow|passwd)\\b",
+        "\\baws\\s+secretsmanager\\b",
+        "\\bkubectl\\s+get\\s+secret\\b"
+      ]
+    }
+  ]
+}
