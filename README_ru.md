@@ -2,13 +2,13 @@
 
 [EN](README.md) | RU
 
-Многоагентный исполнитель задач Jira с управлением по очередям. В состав стека входят Jira, PostgreSQL, RabbitMQ, Ollama, Guardian, Jira bot и Nanobot.
+Многоагентный исполнитель задач Jira с управлением по очередям. В состав стека входят Jira, PostgreSQL, RabbitMQ, Ollama, Guardian, Jira bot и Pikobot.
 
 ## Архитектура
 
 ### Инфраструктура
 
-Jira хранит задачи, PostgreSQL хранит данные Jira, RabbitMQ передаёт сообщения между сервисами, Ollama предоставляет локальную LLM-точку, Guardian фильтрует опасные запросы, Nanobot выполняет согласованную агентскую работу.
+Jira хранит задачи, PostgreSQL хранит данные Jira, RabbitMQ передаёт сообщения между сервисами, Ollama предоставляет локальную LLM-точку, Guardian фильтрует опасные запросы, Pikobot выполняет согласованную агентскую работу.
 
 ![Инфраструктурная архитектура](docs/hardware_arch.png)
 
@@ -66,7 +66,7 @@ docker compose up -d --build --remove-orphans
 Принудительная пересборка локальных сервисов:
 
 ```bash
-docker compose build --no-cache jira-bot guardian nanobot
+docker compose build --no-cache jira-bot guardian pikobot
 docker compose up -d --remove-orphans
 ```
 
@@ -91,7 +91,7 @@ docker compose logs -f --tail=200
 Только агентские сервисы:
 
 ```bash
-docker compose logs -f --tail=200 jira-bot guardian nanobot
+docker compose logs -f --tail=200 jira-bot guardian pikobot
 ```
 
 ## URL
@@ -99,7 +99,7 @@ docker compose logs -f --tail=200 jira-bot guardian nanobot
 - Jira: <http://localhost:8080>
 - RabbitMQ UI: <http://localhost:15672> / `aiops` / `aiops_secret`
 - Ollama: <http://localhost:11434>
-- Nanobot gateway: <http://localhost:18790>
+- Pikobot gateway: <http://localhost:18790>
 
 ## Протокол тестирования
 [Тестирование](testing_ru.md)

@@ -1,0 +1,35 @@
+{
+  "providers": {
+    "custom": {
+      "apiKey": "token",
+      "apiBase": "http://ollama:11434/api/chat"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "provider": "custom",
+      "model": "qwen2.5:14b",
+      "workspace": "/root/.pikobot/workspace"
+    }
+  },
+  "gateway": {
+    "port": 18790
+  },
+  "channels": {
+    "rabbitmq": {
+      "enabled": true,
+      "url": "amqp://aiops:aiops_secret@rabbitmq:5672/",
+      "exchange": "aiops.exchange",
+      "exchangeType": "topic",
+      "durable": true,
+      "prefetchCount": 10,
+      "inboundQueue": "pikobot.requests",
+      "inboundRoutingKey": "pikobot.requests",
+      "outboundRoutingKey": "jira.comments",
+      "allowFrom": [
+        "*"
+      ],
+      "streaming": false
+    }
+  }
+}

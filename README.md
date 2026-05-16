@@ -2,13 +2,13 @@
 
 EN | [RU](README_ru.md)
 
-Queue-driven multi-agent executor for Jira tasks. The stack runs Jira, PostgreSQL, RabbitMQ, Ollama, Guardian, Jira bot and Nanobot.
+Queue-driven multi-agent executor for Jira tasks. The stack runs Jira, PostgreSQL, RabbitMQ, Ollama, Guardian, Jira bot and Pikobot.
 
 ## Architecture
 
 ### Infrastructure
 
-Jira stores work items, PostgreSQL stores Jira data, RabbitMQ moves messages between services, Ollama provides the local LLM endpoint, Guardian filters unsafe requests, and Nanobot executes approved agent work.
+Jira stores work items, PostgreSQL stores Jira data, RabbitMQ moves messages between services, Ollama provides the local LLM endpoint, Guardian filters unsafe requests, and Pikobot executes approved agent work.
 
 ![Infrastructure architecture](docs/hardware_arch.png)
 
@@ -66,7 +66,7 @@ docker compose up -d --build --remove-orphans
 Force rebuild of local services:
 
 ```bash
-docker compose build --no-cache jira-bot guardian nanobot
+docker compose build --no-cache jira-bot guardian pikobot
 docker compose up -d --remove-orphans
 ```
 
@@ -91,7 +91,7 @@ docker compose logs -f --tail=200
 Only agent services:
 
 ```bash
-docker compose logs -f --tail=200 jira-bot guardian nanobot
+docker compose logs -f --tail=200 jira-bot guardian pikobot
 ```
 
 ## URLs
@@ -99,7 +99,7 @@ docker compose logs -f --tail=200 jira-bot guardian nanobot
 - Jira: <http://localhost:8080>
 - RabbitMQ UI: <http://localhost:15672> / `aiops` / `aiops_secret`
 - Ollama: <http://localhost:11434>
-- Nanobot gateway: <http://localhost:18790>
+- Pikobot gateway: <http://localhost:18790>
 
 ## Testing protocol
 [testing](testing.md)

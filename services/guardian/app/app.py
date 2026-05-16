@@ -14,7 +14,7 @@ AMQP_URL = os.getenv("AMQP_URL", "amqp://guest:guest@rabbitmq:5672/")
 AMQP_EXCHANGE = os.getenv("AMQP_EXCHANGE", "aiops.exchange")
 
 QUEUE_IN = os.getenv("QUEUE_IN", "guardian.requests")
-ROUTING_KEY_OK = os.getenv("ROUTING_KEY_OK", "nanobot.requests")
+ROUTING_KEY_OK = os.getenv("ROUTING_KEY_OK", "pikobot.requests")
 ROUTING_KEY_COMMENTS = os.getenv("ROUTING_KEY_COMMENTS", "jira.comments")
 ROUTING_KEY_HUMAN_REVIEW = os.getenv("ROUTING_KEY_HUMAN_REVIEW", "jira.human-review")
 ROUTING_KEY_STATUS = os.getenv("ROUTING_KEY_STATUS", "jira.status")

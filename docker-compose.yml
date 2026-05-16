@@ -125,7 +125,7 @@ services:
       WF_LABEL_AGENT_REPLIED: aiops-agent-replied
       WF_LABEL_AGENT_QUESTION: aiops-agent-question
 
-      ROUTING_KEY_DIRECT_AGENT: nanobot.requests
+      ROUTING_KEY_DIRECT_AGENT: pikobot.requests
       SECURITY_APPROVAL_PHRASE: "Согласовано, замечаний нет."
       BOT_SECURITY_REVIEW_MARKER_PREFIX: "[BOT][WF][SECURITY_REVIEW]"
       JIRA_BROWSER_BASE_URL: ${JIRA_BROWSER_BASE_URL:-http://localhost:8080}
@@ -157,7 +157,7 @@ services:
       AMQP_EXCHANGE: aiops.exchange
       QUEUE_IN: guardian.requests
 
-      ROUTING_KEY_OK: nanobot.requests
+      ROUTING_KEY_OK: pikobot.requests
       ROUTING_KEY_COMMENTS: jira.comments
       ROUTING_KEY_HUMAN_REVIEW: jira.human-review
       ROUTING_KEY_STATUS: jira.status
@@ -166,9 +166,13 @@ services:
       GUARDIAN_ENABLE_LLM: "true"
       GUARDIAN_RULES_PATH: /app/guardian_rules.json
       GUARDIAN_LLM_TIMEOUT_SECONDS: "60"
-      OLLAMA_URL: http://ollama:11434/api/chat
-      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:14b}"
-      OLLAMA_TOKEN: ollama
+      #http://ollama:11434/api/chat
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434/api/chat}
+      #qwen-coder
+      #${OLLAMA_MODEL:-qwen2.5:14b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:14b}
+      #ollama
+      OLLAMA_TOKEN: ${OLLAMA_TOKEN:-ollama}
 
       SECURITY_APPENDIX_REQUIRED: "true"
       GUARDIAN_APPROVED_COMMENT: "Согласовано, замечаний нет."
@@ -179,11 +183,11 @@ services:
     networks:
       - aiops
 
-  nanobot:
+  pikobot:
     build:
-      context: ./services/nanobot
+      context: ./services/pikobot
       dockerfile: Dockerfile
-    container_name: nanobot
+    container_name: pikobot
     restart: unless-stopped
     depends_on:
       ollama:
@@ -192,26 +196,21 @@ services:
         condition: service_healthy
     ports:
       - "18790:18790"
-      - "1234:1234"
-      - "80:80"
-      - "8081:8081"
-      - "5555:5555"
 
     environment:
-      NANOBOT_WORKSPACE: /root/.nanobot/workspace
+      PIKOBOT_WORKSPACE: /root/.pikobot/workspace
     volumes:
-      - ./nanobot-config:/root/.nanobot
-      - ./services/nanobot:/app
+      - ./pikobot-config:/root/.pikobot
+      - ./services/pikobot:/app
     command: ["gateway"]
-    entrypoint: ["/bin/sh", "/app/entrypoint.sh"]
     networks:
       - aiops
 
-  nanobot-cli:
+  pikobot-cli:
     build:
-      context: ./services/nanobot
+      context: ./services/pikobot
       dockerfile: Dockerfile
-    container_name: nanobot-cli
+    container_name: pikobot-cli
     profiles:
       - cli
     depends_on:
@@ -221,7 +220,7 @@ services:
     stdin_open: true
     tty: true
     volumes:
-      - ./nanobot-config:/root/.nanobot
+      - ./pikobot-config:/root/.pikobot
     networks:
       - aiops
 

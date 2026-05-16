@@ -15,7 +15,7 @@ APP_NAME = os.getenv("APP_NAME", "jira-bot")
 AMQP_URL = os.getenv("AMQP_URL", "amqp://guest:guest@rabbitmq:5672/")
 AMQP_EXCHANGE = os.getenv("AMQP_EXCHANGE", "aiops.exchange")
 ROUTING_KEY_OUT = os.getenv("ROUTING_KEY_OUT", "guardian.requests")
-ROUTING_KEY_DIRECT_AGENT = os.getenv("ROUTING_KEY_DIRECT_AGENT", "nanobot.requests")
+ROUTING_KEY_DIRECT_AGENT = os.getenv("ROUTING_KEY_DIRECT_AGENT", "pikobot.requests")
 
 JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "http://jira:8080").rstrip("/")
 JIRA_BROWSER_BASE_URL = os.getenv("JIRA_BROWSER_BASE_URL", JIRA_BASE_URL).rstrip("/")
