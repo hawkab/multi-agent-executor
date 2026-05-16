@@ -11,7 +11,7 @@ The screenshots verify that:
 - Jira works as the user-facing control plane.
 - `jira-bot` receives Jira tasks and sends messages to the queue.
 - `Guardian` checks requests before execution.
-- `AI Agent` / `nanobot` can execute an approved technical task and report the result back to Jira.
+- `AI Agent` / `pikobot` can execute an approved technical task and report the result back to Jira.
 - Dangerous requests are blocked or redirected to manual security review.
 
 ## 1. RabbitMQ channel through Jira
@@ -21,7 +21,7 @@ The screenshots verify that:
 **Scenario.** A non-destructive Jira task asks to verify the chain:
 
 ```text
-Jira -> jira-bot -> guardian -> nanobot -> jira-bot -> Jira
+Jira -> jira-bot -> guardian -> pikobot -> jira-bot -> Jira
 ```
 
 **Expected result.** The task receives a short confirmation comment from the AI Agent.
@@ -42,13 +42,13 @@ Jira -> jira-bot -> guardian -> nanobot -> jira-bot -> Jira
 - remove dangerous actions from the task wording;
 - send the task to manual information security review.
 
-## 2. AI Agent command execution inside the `nanobot` container
+## 2. AI Agent command execution inside the `pikobot` container
 
 ![AI Agent command task](docs/testing/test_devops_agent1.png)
 
 ![AI Agent command result](docs/testing/test_devops_agent2.png)
 
-**Scenario.** A Jira task asks the AI Agent to perform a technical operation inside the `nanobot` container:
+**Scenario.** A Jira task asks the AI Agent to perform a technical operation inside the `pikobot` container:
 
 - install `nginx` if it is not installed;
 - configure it to listen on port `1234`;
@@ -80,7 +80,7 @@ curl http://127.0.0.1:1234
 The screenshots confirm that the main control flow works:
 
 ```text
-Jira -> jira-bot -> queue -> Guardian -> AI Agent / nanobot -> jira-bot -> Jira
+Jira -> jira-bot -> queue -> Guardian -> AI Agent / pikobot -> jira-bot -> Jira
 ```
 
 Confirmed behavior:

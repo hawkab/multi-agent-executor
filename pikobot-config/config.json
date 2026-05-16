@@ -9,7 +9,7 @@
     "defaults": {
       "provider": "custom",
       "model": "qwen2.5:14b",
-      "workspace": "/root/.nanobot/workspace"
+      "workspace": "/root/.pikobot/workspace"
     }
   },
   "gateway": {
@@ -23,10 +23,12 @@
       "exchangeType": "topic",
       "durable": true,
       "prefetchCount": 10,
-      "inboundQueue": "nanobot.requests",
-      "inboundRoutingKey": "nanobot.requests",
+      "inboundQueue": "pikobot.requests",
+      "inboundRoutingKey": "pikobot.requests",
       "outboundRoutingKey": "jira.comments",
-      "allowFrom": ["*"],
+      "allowFrom": [
+        "*"
+      ],
       "streaming": false
     }
   }
