@@ -4,6 +4,10 @@
 
 Многоагентный исполнитель задач Jira с управлением по очередям. В состав стека входят Jira, PostgreSQL, RabbitMQ, Ollama, Guardian, Jira bot и Pikobot.
 
+[![Поддержать проект · TON network](https://hawkab.github.io/support/support-button.svg)](https://hawkab.github.io/support/)
+
+Необязательные взносы помогают в разработке, сопровождении и тестировании. На [странице поддержки](https://hawkab.github.io/support/) есть QR-код, ссылка на кошелёк и кнопки копирования — работает на компьютере и телефоне. Сумму вы выбираете в кошельке.
+
 ## Архитектура
 
 ### Инфраструктура
