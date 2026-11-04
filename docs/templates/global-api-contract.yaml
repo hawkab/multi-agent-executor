@@ -1,0 +1,49 @@
+version: "1.0.0"
+status: frozen
+user_outcome: "Immutable user-visible outcome copied from the approved specification"
+affected_components:
+  - backend
+  - frontend
+  - database
+
+http:
+  openapi: "3.1.0"
+  operations: []
+events:
+  schemas: []
+errors:
+  media_type: application/problem+json
+  codes: []
+idempotency:
+  keys: []
+  retry_semantics: ""
+data_contract:
+  entities: []
+  constraints: []
+migration_compatibility:
+  expand_migrate_contract: true
+  backward_compatible_until: ""
+  data_preservation_checks: []
+fixtures:
+  - path: contracts/fixtures/contract-v1.json
+    purpose: shared-contract-test
+ownership:
+  backend: []
+  frontend: []
+  database: []
+role_checks:
+  backend-developer: []
+  frontend-developer: []
+  dba-developer: []
+acceptance_checks:
+  shared: []
+  integration: []
+rollout:
+  strategy: compatible
+  steps: []
+rollback:
+  strategy: revert
+  steps: []
+review:
+  self_review_required: true
+  independent_review_per_role: true

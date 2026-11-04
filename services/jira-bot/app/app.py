@@ -2,8 +2,10 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pika
@@ -16,14 +18,22 @@ AMQP_URL = os.getenv("AMQP_URL", "amqp://rabbitmq:5672/")
 AMQP_EXCHANGE = os.getenv("AMQP_EXCHANGE", "aiops.exchange")
 ROUTING_KEY_OUT = os.getenv("ROUTING_KEY_OUT", "guardian.requests")
 ROUTING_KEY_DIRECT_AGENT = os.getenv("ROUTING_KEY_DIRECT_AGENT", "pikobot.requests")
+ROUTING_KEY_WORKFLOW = os.getenv("ROUTING_KEY_WORKFLOW", "workflow.requests")
+ROUTING_KEY_EXTERNAL_EVENTS = os.getenv(
+    "ROUTING_KEY_EXTERNAL_EVENTS", "workflow.external-events"
+)
 
 JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "http://jira:8080").rstrip("/")
 JIRA_BROWSER_BASE_URL = os.getenv("JIRA_BROWSER_BASE_URL", JIRA_BASE_URL).rstrip("/")
 JIRA_USERNAME = os.getenv("JIRA_USERNAME", "")
 JIRA_PASSWORD = os.getenv("JIRA_PASSWORD", "")
+JIRA_COMMAND_STATE_PATH = Path(
+    os.getenv("JIRA_COMMAND_STATE_PATH", "/state/jira-commands.sqlite3")
+)
 
 JIRA_POLL_SECONDS = int(os.getenv("JIRA_POLL_SECONDS", "20"))
 JIRA_MAX_RESULTS = int(os.getenv("JIRA_MAX_RESULTS", "20"))
+INBOUND_MAX_RETRIES = int(os.getenv("INBOUND_MAX_RETRIES", "3"))
 JIRA_JQL = os.getenv(
     "JIRA_JQL",
     'assignee = currentUser() AND statusCategory = "To Do" ORDER BY created DESC',
@@ -33,6 +43,8 @@ JIRA_INITIAL_STATUS_NAME = os.getenv("JIRA_INITIAL_STATUS_NAME", "Сделать
 JIRA_INITIAL_STATUS_CATEGORY_NAME = os.getenv("JIRA_INITIAL_STATUS_CATEGORY_NAME", "To Do").strip().lower()
 JIRA_IN_PROGRESS_STATUS_NAME = os.getenv("JIRA_IN_PROGRESS_STATUS_NAME", "В работе").strip()
 JIRA_WAITING_STATUS_NAME = os.getenv("JIRA_WAITING_STATUS_NAME", "Ожидание").strip()
+JIRA_DONE_STATUS_NAME = os.getenv("JIRA_DONE_STATUS_NAME", "Готово").strip()
+JIRA_SUBTASK_TYPE_NAME = os.getenv("JIRA_SUBTASK_TYPE_NAME", "Подзадача").strip()
 
 JIRA_COMMENT_ON_TAKE = os.getenv("JIRA_COMMENT_ON_TAKE", "true").strip().lower() == "true"
 JIRA_FORWARD_STATUS_COMMENTS = os.getenv("JIRA_FORWARD_STATUS_COMMENTS", "false").strip().lower() == "true"
@@ -54,6 +66,9 @@ WF_LABEL_NEED_INFO = os.getenv("WF_LABEL_NEED_INFO", "aiops-need-info").strip()
 WF_LABEL_SECURITY_REVIEW = os.getenv("WF_LABEL_SECURITY_REVIEW", "aiops-security-review").strip()
 WF_LABEL_AGENT_REPLIED = os.getenv("WF_LABEL_AGENT_REPLIED", "aiops-agent-replied").strip()
 WF_LABEL_AGENT_QUESTION = os.getenv("WF_LABEL_AGENT_QUESTION", "aiops-agent-question").strip()
+WF_LABEL_WORKFLOW_WAITING_USER = os.getenv(
+    "WF_LABEL_WORKFLOW_WAITING_USER", "aiops-workflow-waiting-user"
+).strip()
 
 ALL_WORKFLOW_LABELS = {
     WF_LABEL_GUARDIAN_REVIEW,
@@ -62,12 +77,14 @@ ALL_WORKFLOW_LABELS = {
     WF_LABEL_SECURITY_REVIEW,
     WF_LABEL_AGENT_REPLIED,
     WF_LABEL_AGENT_QUESTION,
+    WF_LABEL_WORKFLOW_WAITING_USER,
 }
 
 INBOUND_QUEUES = [
     "jira.comments",
     "jira.status",
     "jira.human-review",
+    "jira.commands",
 ]
 
 CURRENT_USER_CACHE: dict[str, Any] | None = None
@@ -99,7 +116,21 @@ def connect_amqp() -> tuple[pika.BlockingConnection, pika.adapters.blocking_conn
             queue=queue_name,
             routing_key=queue_name,
         )
+        dlq_name = f"{queue_name}.dlq"
+        channel.queue_declare(queue=dlq_name, durable=True)
+        channel.queue_bind(
+            exchange=AMQP_EXCHANGE,
+            queue=dlq_name,
+            routing_key=dlq_name,
+        )
 
+    channel.queue_declare(queue=ROUTING_KEY_EXTERNAL_EVENTS, durable=True)
+    channel.queue_bind(
+        exchange=AMQP_EXCHANGE,
+        queue=ROUTING_KEY_EXTERNAL_EVENTS,
+        routing_key=ROUTING_KEY_EXTERNAL_EVENTS,
+    )
+    channel.confirm_delivery()
     log("connected to RabbitMQ")
     return connection, channel
 
@@ -117,6 +148,7 @@ def publish(
             content_type="application/json",
             delivery_mode=2,
         ),
+        mandatory=True,
     )
     log(f"published to {routing_key}: issue={payload.get('issue_key')}")
 
@@ -202,28 +234,74 @@ def fetch_myself(session: requests.Session) -> dict[str, Any]:
 
 def fetch_issues(session: requests.Session) -> list[dict[str, Any]]:
     url = f"{JIRA_BASE_URL}/rest/api/2/search"
-    params = {
-        "jql": JIRA_JQL,
-        "fields": "summary,description,status,labels,assignee",
-        "maxResults": JIRA_MAX_RESULTS,
-    }
-
-    response = session.get(url, params=params, timeout=20)
-    response.raise_for_status()
-
-    payload = response.json()
-    return payload.get("issues", [])
+    jql_queries = [
+        JIRA_JQL,
+        f'labels = "{WF_LABEL_WORKFLOW_WAITING_USER}" ORDER BY updated ASC',
+    ]
+    issues_by_key: dict[str, dict[str, Any]] = {}
+    for jql in jql_queries:
+        params = {
+            "jql": jql,
+            "fields": "summary,description,status,labels,assignee",
+            "maxResults": JIRA_MAX_RESULTS,
+        }
+        response = session.get(url, params=params, timeout=20)
+        response.raise_for_status()
+        for issue in response.json().get("issues", []):
+            key = str(issue.get("key", "")).strip()
+            if key and key not in issues_by_key:
+                issues_by_key[key] = issue
+    return list(issues_by_key.values())
 
 
 def fetch_issue_full(session: requests.Session, issue_key: str) -> dict[str, Any]:
     url = f"{JIRA_BASE_URL}/rest/api/2/issue/{issue_key}"
     params = {
-        "fields": "summary,description,status,labels,assignee,reporter,comment",
+        "fields": "summary,description,status,labels,assignee,reporter,comment,attachment",
         "expand": "changelog",
     }
     response = session.get(url, params=params, timeout=20)
     response.raise_for_status()
     return response.json()
+
+
+def extract_user_answer(issue: dict[str, Any]) -> dict[str, str] | None:
+    fields = issue.get("fields", {}) or {}
+    comments = ((fields.get("comment") or {}).get("comments") or [])
+    reporter = fields.get("reporter") or {}
+    reporter_ids = {
+        str(reporter.get(field, "")).strip().lower()
+        for field in ("name", "key", "displayName", "emailAddress")
+        if str(reporter.get(field, "")).strip()
+    }
+    question_index = -1
+    for index, comment in enumerate(comments):
+        if "[BOT][QUESTION]" in str(comment.get("body", "")):
+            question_index = index
+    if question_index < 0:
+        return None
+    for comment in reversed(comments[question_index + 1 :]):
+        author = comment.get("author") or {}
+        author_ids = {
+            str(author.get(field, "")).strip().lower()
+            for field in ("name", "key", "displayName", "emailAddress")
+            if str(author.get(field, "")).strip()
+        }
+        body = str(comment.get("body", "")).strip()
+        comment_id = str(comment.get("id", "")).strip()
+        if body and comment_id and reporter_ids.intersection(author_ids):
+            return {
+                "comment_id": comment_id,
+                "body": body,
+                "author": str(
+                    author.get("name")
+                    or author.get("key")
+                    or author.get("displayName")
+                    or ""
+                ),
+                "created_at": str(comment.get("created", "")),
+            }
+    return None
 
 
 def build_guardian_payload(issue: dict[str, Any]) -> dict[str, Any]:
@@ -324,6 +402,18 @@ def transition_issue_to_status(session: requests.Session, issue_key: str, target
     return True
 
 
+def transition_issue_or_verify(
+    session: requests.Session, issue_key: str, target_status_name: str
+) -> bool:
+    if transition_issue_to_status(session, issue_key, target_status_name):
+        return True
+    issue = fetch_issue_full(session, issue_key)
+    actual = str(
+        (((issue.get("fields") or {}).get("status") or {}).get("name", ""))
+    ).strip()
+    return actual.lower() == target_status_name.strip().lower()
+
+
 def update_issue(
     session: requests.Session,
     issue_key: str,
@@ -389,6 +479,16 @@ def assign_issue_to_user(session: requests.Session, issue_key: str, login: str) 
     return False
 
 
+def assign_issue_or_verify(
+    session: requests.Session, issue_key: str, login: str
+) -> bool:
+    if assign_issue_to_user(session, issue_key, login):
+        return True
+    return login.strip().lower() in issue_assignee_identifiers(
+        fetch_issue_full(session, issue_key)
+    )
+
+
 def assign_issue_to_reporter(session: requests.Session, issue: dict[str, Any]) -> bool:
     fields = issue.get("fields", {}) or {}
     reporter = fields.get("reporter") or {}
@@ -414,6 +514,125 @@ def post_comment_to_jira(
     response = session.post(url, data=json.dumps(body, ensure_ascii=False), timeout=20)
     response.raise_for_status()
     log(f"comment added to {issue_key}")
+
+
+def operation_label(operation_id: str) -> str:
+    digest = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()[:20]
+    return f"aiops-op-{digest}"
+
+
+def find_generated_subtask(
+    session: requests.Session,
+    parent_issue_key: str,
+    operation_id: str,
+) -> str | None:
+    if not operation_id:
+        return None
+    response = session.get(
+        f"{JIRA_BASE_URL}/rest/api/2/search",
+        params={
+            "jql": (
+                f'parent = "{parent_issue_key}" '
+                f'AND labels = "{operation_label(operation_id)}"'
+            ),
+            "fields": "key",
+            "maxResults": 2,
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    issues = response.json().get("issues", [])
+    return str(issues[0].get("key", "")).strip() if issues else None
+
+
+def issue_has_attachment(
+    session: requests.Session, issue_key: str, filename: str
+) -> bool:
+    issue = fetch_issue_full(session, issue_key)
+    attachments = (issue.get("fields") or {}).get("attachment") or []
+    return any(str(item.get("filename", "")) == filename for item in attachments)
+
+
+def parent_has_operation_comment(
+    session: requests.Session, issue_key: str, operation_id: str
+) -> bool:
+    if not operation_id:
+        return False
+    issue = fetch_issue_full(session, issue_key)
+    comments = ((issue.get("fields") or {}).get("comment") or {}).get("comments") or []
+    marker = f"[AIOPS-OP:{operation_id}]"
+    return any(marker in str(comment.get("body", "")) for comment in comments)
+
+
+def create_jira_subtask(
+    session: requests.Session,
+    parent_issue_key: str,
+    payload: dict[str, Any],
+) -> str:
+    parent = fetch_issue_full(session, parent_issue_key)
+    project = (parent.get("fields") or {}).get("project") or {}
+    project_key = str(project.get("key", "")).strip() or parent_issue_key.split("-", 1)[0]
+    summary = str(payload.get("summary", "")).strip()
+    if not summary:
+        raise ValueError("subtask summary is required")
+    spec = payload.get("spec") or payload.get("machine_readable_spec") or {}
+    description = str(payload.get("description", "")).strip()
+    if spec:
+        description = (
+            f"{description}\n\nMachine-readable specification:\n"
+            f"{{noformat}}\n{json.dumps(spec, ensure_ascii=False, indent=2)}\n{{noformat}}"
+        ).strip()
+    operation_id = str(payload.get("operation_id", "")).strip()
+    labels = ["aiops-generated-subtask"]
+    if operation_id:
+        labels.append(operation_label(operation_id))
+    response = session.post(
+        f"{JIRA_BASE_URL}/rest/api/2/issue",
+        json={
+            "fields": {
+                "project": {"key": project_key},
+                "parent": {"key": parent_issue_key},
+                "summary": summary,
+                "description": description,
+                "issuetype": {"name": JIRA_SUBTASK_TYPE_NAME},
+                "labels": labels,
+            }
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    issue_key = str(response.json().get("key", "")).strip()
+    if not issue_key:
+        raise RuntimeError("Jira did not return created subtask key")
+    log(f"subtask created: {issue_key} parent={parent_issue_key}")
+    return issue_key
+
+
+def attach_json_to_issue(
+    session: requests.Session,
+    issue_key: str,
+    filename: str,
+    payload: dict[str, Any],
+) -> None:
+    previous_content_type = session.headers.pop("Content-Type", None)
+    try:
+        response = session.post(
+            f"{JIRA_BASE_URL}/rest/api/2/issue/{issue_key}/attachments",
+            headers={"X-Atlassian-Token": "no-check"},
+            files={
+                "file": (
+                    filename,
+                    json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+                    "application/json",
+                )
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+    finally:
+        if previous_content_type is not None:
+            session.headers["Content-Type"] = previous_content_type
+    log(f"attachment uploaded: {issue_key}/{filename}")
 
 
 def parse_jira_datetime(value: str) -> datetime | None:
@@ -836,15 +1055,51 @@ def publish_new_issues(
         if not key:
             continue
 
-        if not issue_matches_current_user(issue, current_user):
-            log(f"skip not assigned to current user: {key}")
-            continue
+        labels = issue_labels(issue)
+        waiting_for_user = normalize_label(WF_LABEL_WORKFLOW_WAITING_USER) in labels
 
         if not issue_is_in_initial_status(issue):
             log(f"skip issue not in initial status/category: {key}")
             continue
 
-        labels = issue_labels(issue)
+        if waiting_for_user:
+            full_issue = fetch_issue_full(session, key)
+            answer = extract_user_answer(full_issue)
+            if answer is None:
+                log(f"skip waiting issue without reporter answer: {key}")
+                continue
+            payload = build_guardian_payload(full_issue)
+            payload["description"] = (
+                f"{payload.get('description', '')}\n\n"
+                f"User answer from Jira comment {answer['comment_id']}:\n"
+                f"{answer['body']}"
+            ).strip()
+            payload["source"] = "jira-bot-workflow-resume"
+            payload["correlationId"] = (
+                f"jira-user-answer-{key}-{answer['comment_id']}"
+            )
+            payload["metadata"].update(
+                {
+                    "source": "jira-bot-workflow-resume",
+                    "answerCommentId": answer["comment_id"],
+                    "answerAuthor": answer["author"],
+                    "answerCreatedAt": answer["created_at"],
+                }
+            )
+            publish(channel, ROUTING_KEY_OUT, payload)
+            update_issue_labels(
+                session,
+                key,
+                add_labels=[WF_LABEL_GUARDIAN_REVIEW],
+                remove_labels=[WF_LABEL_WORKFLOW_WAITING_USER],
+            )
+            transition_issue_to_status(session, key, JIRA_IN_PROGRESS_STATUS_NAME)
+            continue
+
+        if not issue_matches_current_user(issue, current_user):
+            log(f"skip not assigned to current user: {key}")
+            continue
+
         has_security_review = normalize_label(WF_LABEL_SECURITY_REVIEW) in labels
         has_agent_question = normalize_label(WF_LABEL_AGENT_QUESTION) in labels
 
@@ -1125,6 +1380,282 @@ def build_comment_from_message(message: dict[str, Any], source_queue: str) -> di
     return action
 
 
+def build_worklog_comment(message: dict[str, Any]) -> str:
+    role = str(message.get("role", "agent")).strip() or "agent"
+    status = str(message.get("status", "unknown")).strip() or "unknown"
+    event_id = str(message.get("event_id", "")).strip()
+    summary = str(message.get("summary", "")).strip()
+    lines = [f"[BOT][WORKLOG] role={role} status={status}"]
+    if event_id:
+        lines.append(f"event={event_id}")
+    if summary:
+        lines.extend(["", summary])
+    entries = message.get("entries") or []
+    if entries:
+        lines.extend(["", "Steps:"])
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        step = str(entry.get("step", "step")).strip()
+        entry_status = str(entry.get("status", "unknown")).strip()
+        evidence = str(entry.get("evidence", "")).strip()
+        suffix = f" - {evidence}" if evidence else ""
+        lines.append(f"- [{entry_status}] {step}{suffix}")
+    return "\n".join(lines)
+
+
+def build_command_completion_event(
+    message: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    operation_id = str(message.get("operation_id", "")).strip()
+    if not operation_id:
+        raise ValueError("Jira command completion has no operation_id")
+    command_id = str(message.get("command_id") or operation_id)
+    return {
+        "senderId": APP_NAME,
+        "source": "jira-bot",
+        "issue_key": issue_key_from_message(message),
+        "operation_id": operation_id,
+        "status": "completed",
+        "result": result,
+        "event_id": f"jira:{command_id}:completed",
+    }
+
+
+def execute_jira_command_once(
+    session: requests.Session,
+    message: dict[str, Any],
+    state_path: str | Path = JIRA_COMMAND_STATE_PATH,
+) -> dict[str, Any]:
+    command_id = str(message.get("command_id", "")).strip()
+    if not command_id:
+        return execute_jira_command(session, message)
+
+    path = Path(state_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as db:
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS command_saga (
+                command_id TEXT PRIMARY KEY,
+                issue_key TEXT NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT,
+                updated_at REAL NOT NULL
+            )"""
+        )
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT status, result_json FROM command_saga WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        if row and row[0] == "completed":
+            return json.loads(row[1] or "{}")
+        db.execute(
+            """INSERT INTO command_saga(
+                command_id, issue_key, action, status, result_json, updated_at
+            ) VALUES (?, ?, ?, 'pending', NULL, ?)
+            ON CONFLICT(command_id) DO UPDATE SET
+                status = 'pending', updated_at = excluded.updated_at""",
+            (
+                command_id,
+                issue_key_from_message(message),
+                str(message.get("action", "")),
+                time.time(),
+            ),
+        )
+        result = execute_jira_command(session, message)
+        db.execute(
+            """UPDATE command_saga
+            SET status = 'completed', result_json = ?, updated_at = ?
+            WHERE command_id = ?""",
+            (json.dumps(result, ensure_ascii=False), time.time(), command_id),
+        )
+        return result
+
+
+def post_command_comment_once(
+    session: requests.Session,
+    issue_key: str,
+    command_id: str,
+    text: str,
+) -> None:
+    if command_id and parent_has_operation_comment(session, issue_key, command_id):
+        return
+    marker = f"[AIOPS-OP:{command_id}] " if command_id else ""
+    post_comment_to_jira(session, issue_key, marker + text)
+
+
+def execute_jira_command(
+    session: requests.Session, message: dict[str, Any]
+) -> dict[str, Any]:
+    action = str(message.get("action", "")).strip().lower()
+    issue_key = issue_key_from_message(message)
+    if not issue_key:
+        raise ValueError("Jira command has no issue key")
+    command_id = str(message.get("command_id", "")).strip()
+
+    if action == "worklog":
+        post_command_comment_once(
+            session, issue_key, command_id, build_worklog_comment(message)
+        )
+        return {"issue_key": issue_key}
+    if action == "ask_user":
+        question = str(message.get("question", "Требуется уточнение.")).strip()
+        post_command_comment_once(
+            session,
+            issue_key,
+            command_id,
+            "[BOT][QUESTION] Агенту требуется уточнение пользователя.\n\n"
+            + jira_quote(question),
+        )
+        update_issue_labels(
+            session,
+            issue_key,
+            add_labels=[WF_LABEL_WORKFLOW_WAITING_USER],
+            remove_labels=[],
+        )
+        if not transition_issue_or_verify(
+            session, issue_key, JIRA_WAITING_STATUS_NAME
+        ):
+            raise RuntimeError("waiting transition was not applied")
+        if not assign_issue_to_reporter(
+            session, fetch_issue_full(session, issue_key)
+        ):
+            raise RuntimeError("reporter assignment was not applied")
+        return {"issue_key": issue_key}
+    if action == "create_subtask":
+        operation_id = str(message.get("operation_id", "")).strip()
+        subtask_key = (
+            find_generated_subtask(session, issue_key, operation_id)
+            if operation_id
+            else None
+        )
+        if not subtask_key:
+            subtask_key = create_jira_subtask(session, issue_key, message)
+        spec = message.get("spec") or message.get("machine_readable_spec") or {}
+        attachment_name = "machine-readable-spec.json"
+        if spec and (
+            not operation_id
+            or not issue_has_attachment(session, subtask_key, attachment_name)
+        ):
+            attach_json_to_issue(session, subtask_key, attachment_name, spec)
+        if not operation_id or not parent_has_operation_comment(
+            session, issue_key, operation_id
+        ):
+            marker = f"[AIOPS-OP:{operation_id}] " if operation_id else ""
+            post_comment_to_jira(
+                session,
+                issue_key,
+                f"{marker}[BOT] Создана подзадача [{subtask_key}].",
+            )
+        return {"issue_key": subtask_key, "parent_issue_key": issue_key}
+    if action == "create_test_task":
+        operation_id = str(message.get("operation_id", "")).strip()
+        original_request = str(message.get("original_request", "")).strip()
+        test_payload = {
+            "summary": f"Testing: {issue_key}",
+            "description": "Validate deployed behavior only against the original user request.",
+            "operation_id": operation_id,
+        }
+        test_issue_key = (
+            find_generated_subtask(session, issue_key, operation_id)
+            if operation_id
+            else None
+        )
+        if not test_issue_key:
+            test_issue_key = create_jira_subtask(session, issue_key, test_payload)
+        attachment_name = "original-user-request.json"
+        if not operation_id or not issue_has_attachment(
+            session, test_issue_key, attachment_name
+        ):
+            attach_json_to_issue(
+                session,
+                test_issue_key,
+                attachment_name,
+                {"original_request": original_request},
+            )
+        if not operation_id or not parent_has_operation_comment(
+            session, issue_key, operation_id
+        ):
+            marker = f"[AIOPS-OP:{operation_id}] " if operation_id else ""
+            post_comment_to_jira(
+                session,
+                issue_key,
+                f"{marker}[BOT] Создана задача тестирования [{test_issue_key}].",
+            )
+        return {"issue_key": test_issue_key, "parent_issue_key": issue_key}
+    if action == "comment":
+        post_command_comment_once(
+            session, issue_key, command_id, str(message.get("text", ""))
+        )
+        return {"issue_key": issue_key}
+    if action == "transition":
+        target_status = str(message.get("status", ""))
+        if not transition_issue_or_verify(session, issue_key, target_status):
+            raise RuntimeError("transition was not applied")
+        return {"issue_key": issue_key, "status": target_status}
+    if action == "assign":
+        login = str(message.get("login", ""))
+        if not assign_issue_or_verify(session, issue_key, login):
+            raise RuntimeError("assignment was not applied")
+        return {"issue_key": issue_key, "assignee": login}
+    if action == "merge":
+        post_comment_to_jira(
+            session,
+            issue_key,
+            f"[BOT] Получены {int(message.get('approvals', 2))} обязательных approve. MR готов к автоматическому merge по правилам CI/CD.",
+        )
+        return {"issue_key": issue_key}
+    if action == "close":
+        if not transition_issue_or_verify(session, issue_key, JIRA_DONE_STATUS_NAME):
+            raise RuntimeError("close transition was not applied")
+        return {"issue_key": issue_key, "status": JIRA_DONE_STATUS_NAME}
+    if action == "escalate":
+        reason = str(message.get("reason", "Неизвестная ошибка workflow.")).strip()
+        post_comment_to_jira(session, issue_key, "[BOT][ESCALATION] " + reason)
+        if not transition_issue_or_verify(
+            session, issue_key, JIRA_WAITING_STATUS_NAME
+        ):
+            raise RuntimeError("escalation transition was not applied")
+        return {"issue_key": issue_key, "status": JIRA_WAITING_STATUS_NAME}
+    raise ValueError(f"unsupported Jira command: {action}")
+
+
+def handle_inbound_failure(
+    channel: pika.adapters.blocking_connection.BlockingChannel,
+    queue_name: str,
+    method: Any,
+    properties: Any,
+    body: bytes,
+    error: Exception,
+) -> None:
+    headers = dict(getattr(properties, "headers", None) or {})
+    retry_count = int(headers.get("x-aiops-retry", 0))
+    permanent = isinstance(error, (ValueError, TypeError, json.JSONDecodeError))
+    exhausted = retry_count >= INBOUND_MAX_RETRIES
+    target = f"{queue_name}.dlq" if permanent or exhausted else queue_name
+    if target == queue_name:
+        headers["x-aiops-retry"] = retry_count + 1
+    headers["x-aiops-error"] = type(error).__name__
+    channel.basic_publish(
+        exchange=AMQP_EXCHANGE,
+        routing_key=target,
+        body=body,
+        properties=pika.BasicProperties(
+            content_type=getattr(properties, "content_type", None) or "application/json",
+            delivery_mode=2,
+            headers=headers,
+        ),
+        mandatory=True,
+    )
+    channel.basic_ack(delivery_tag=method.delivery_tag)
+    log(
+        f"message from {queue_name} routed to {target}: "
+        f"retry={retry_count}, error={type(error).__name__}"
+    )
+
+
 def drain_inbound_messages(
     session: requests.Session,
     channel: pika.adapters.blocking_connection.BlockingChannel,
@@ -1141,6 +1672,18 @@ def drain_inbound_messages(
 
                 if not issue_key:
                     log("skip inbound message: issue_key is empty")
+                    channel.basic_ack(delivery_tag=method.delivery_tag)
+                    continue
+
+                if queue_name == "jira.commands":
+                    result = execute_jira_command_once(session, message)
+                    operation_id = str(message.get("operation_id", "")).strip()
+                    if operation_id:
+                        publish(
+                            channel,
+                            ROUTING_KEY_EXTERNAL_EVENTS,
+                            build_command_completion_event(message, result),
+                        )
                     channel.basic_ack(delivery_tag=method.delivery_tag)
                     continue
 
@@ -1219,8 +1762,9 @@ def drain_inbound_messages(
 
             except Exception as exc:
                 log(f"failed to process message from {queue_name}: {exc}")
-                channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-                break
+                handle_inbound_failure(
+                    channel, queue_name, method, properties, body, exc
+                )
 
 
 def main() -> None:

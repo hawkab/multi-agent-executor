@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any, Literal
 
 import aio_pika
@@ -59,6 +60,27 @@ class RabbitMQChannel(BaseChannel):
 
     def __init__(self, config: Any, bus):
         parsed = RabbitMQChannelConfig.model_validate(config or {})
+        inbound_queue = os.getenv("PIKOBOT_RABBITMQ_INBOUND_QUEUE", "").strip()
+        inbound_routing_key = os.getenv(
+            "PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY", ""
+        ).strip()
+        if inbound_queue:
+            parsed.inbound_queue = inbound_queue
+        if inbound_routing_key:
+            parsed.inbound_routing_key = inbound_routing_key
+        expected_role = os.getenv("PIKOBOT_EXPECTED_ROLE", "").strip()
+        if expected_role:
+            expected_route = f"agent.{expected_role}.requests"
+            if (
+                parsed.inbound_queue != expected_route
+                or parsed.inbound_routing_key != expected_route
+            ):
+                raise ValueError(
+                    "expected role queue/routing key "
+                    f"'{expected_route}', got queue='{parsed.inbound_queue}', "
+                    f"routing_key='{parsed.inbound_routing_key}'"
+                )
+            parsed.allow_from = ["workflow-orchestrator"]
         super().__init__(parsed, bus)
         self.config: RabbitMQChannelConfig
 
@@ -272,4 +294,6 @@ class RabbitMQChannel(BaseChannel):
         )
 
         publish_key = "" if self.config.exchange_type == "fanout" else routing_key
-        await self._exchange.publish(amqp_message, routing_key=publish_key)
+        await self._exchange.publish(
+            amqp_message, routing_key=publish_key, mandatory=True
+        )

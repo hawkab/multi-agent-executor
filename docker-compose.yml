@@ -1,3 +1,5 @@
+name: multi-agent-executor
+
 services:
   jira-db:
     image: postgres:17
@@ -21,7 +23,7 @@ services:
   jira:
     image: atlassian/jira-software:latest
     container_name: jira
-    restart: unless-stopped
+    restart: "no"
     depends_on:
       jira-db:
         condition: service_healthy
@@ -68,15 +70,20 @@ services:
 
   ollama:
     image: ollama/ollama:0.18.3
-    container_name: ollama
+    container_name: multi-agent-executor-ollama
     restart: unless-stopped
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
       TZ: Europe/Moscow
     ports:
-      - "11434:11434"
+      - "11435:11434"
     volumes:
       - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     networks:
       - aiops
 
@@ -99,6 +106,7 @@ services:
       JIRA_BASE_URL: http://jira:8080
       JIRA_USERNAME: ${JIRA_USERNAME:-agent-orchestrator}
       JIRA_PASSWORD: ${JIRA_PASSWORD:-}
+      JIRA_COMMAND_STATE_PATH: /state/jira-commands.sqlite3
 
       AMQP_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       AMQP_EXCHANGE: aiops.exchange
@@ -109,6 +117,8 @@ services:
       JIRA_INITIAL_STATUS_CATEGORY_NAME: To Do
       JIRA_IN_PROGRESS_STATUS_NAME: В работе
       JIRA_WAITING_STATUS_NAME: Ожидание
+      JIRA_DONE_STATUS_NAME: ${JIRA_DONE_STATUS_NAME:-Готово}
+      JIRA_SUBTASK_TYPE_NAME: ${JIRA_SUBTASK_TYPE_NAME:-Подзадача}
 
       JIRA_COMMENT_ON_TAKE: "true"
       JIRA_FORWARD_STATUS_COMMENTS: "false"
@@ -125,13 +135,14 @@ services:
       WF_LABEL_AGENT_REPLIED: aiops-agent-replied
       WF_LABEL_AGENT_QUESTION: aiops-agent-question
 
-      ROUTING_KEY_DIRECT_AGENT: pikobot.requests
+      ROUTING_KEY_DIRECT_AGENT: workflow.requests
       SECURITY_APPROVAL_PHRASE: "Согласовано, замечаний нет."
       BOT_SECURITY_REVIEW_MARKER_PREFIX: "[BOT][WF][SECURITY_REVIEW]"
       JIRA_BROWSER_BASE_URL: ${JIRA_BROWSER_BASE_URL:-http://localhost:8080}
 
     volumes:
       - ./services/jira-bot/app:/app
+      - jira_bot_state:/state
     working_dir: /app
     command: ["python", "-u", "app.py"]
     networks:
@@ -157,7 +168,7 @@ services:
       AMQP_EXCHANGE: aiops.exchange
       QUEUE_IN: guardian.requests
 
-      ROUTING_KEY_OK: pikobot.requests
+      ROUTING_KEY_OK: workflow.requests
       ROUTING_KEY_COMMENTS: jira.comments
       ROUTING_KEY_HUMAN_REVIEW: jira.human-review
       ROUTING_KEY_STATUS: jira.status
@@ -169,7 +180,6 @@ services:
       #http://ollama:11434/api/chat
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434/api/chat}
       #qwen-coder
-      #${OLLAMA_MODEL:-qwen2.5:14b}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:14b}
       #ollama
       OLLAMA_TOKEN: ${OLLAMA_TOKEN:-}
@@ -180,6 +190,93 @@ services:
       - ./services/guardian/app:/app
     working_dir: /app
     command: ["python", "-u", "app.py"]
+    networks:
+      - aiops
+
+  workflow-orchestrator:
+    build:
+      context: ./services/workflow-orchestrator
+      dockerfile: Dockerfile
+    container_name: workflow-orchestrator
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      TZ: Europe/Moscow
+      AMQP_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
+      AMQP_EXCHANGE: aiops.exchange
+      WORKFLOW_STATE_PATH: /state/workflow.sqlite3
+      WORKFLOW_LEASE_SECONDS: "1800"
+      WORKFLOW_MAX_ATTEMPTS: "3"
+      HYPERVISOR_POLL_SECONDS: "30"
+      ALLOW_STUB_TERMINAL_VERIFICATION: "false"
+      JIRA_USER_ANALYST: ${JIRA_USER_ANALYST:-agent-analyst}
+      JIRA_USER_ANALYST_REVIEWER: ${JIRA_USER_ANALYST_REVIEWER:-agent-analyst-reviewer}
+      JIRA_USER_DEVELOPER: ${JIRA_USER_DEVELOPER:-agent-developer}
+      JIRA_USER_BACKEND_DEVELOPER: ${JIRA_USER_BACKEND_DEVELOPER:-agent-backend-developer}
+      JIRA_USER_FRONTEND_DEVELOPER: ${JIRA_USER_FRONTEND_DEVELOPER:-agent-frontend-developer}
+      JIRA_USER_DBA_DEVELOPER: ${JIRA_USER_DBA_DEVELOPER:-agent-dba-developer}
+      JIRA_USER_DEVELOPER_REVIEWER: ${JIRA_USER_DEVELOPER_REVIEWER:-agent-developer-reviewer}
+      JIRA_USER_DEVOPS: ${JIRA_USER_DEVOPS:-agent-devops}
+      JIRA_USER_TESTER: ${JIRA_USER_TESTER:-agent-tester}
+    volumes:
+      - workflow_state:/state
+    healthcheck:
+      test: ["CMD", "test", "-f", "/state/workflow.ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    networks:
+      - aiops
+
+  agent-hypervisor:
+    build:
+      context: ./services/workflow-orchestrator
+      dockerfile: Dockerfile
+    container_name: agent-hypervisor
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      workflow-orchestrator:
+        condition: service_started
+    environment:
+      TZ: Europe/Moscow
+      AMQP_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
+      AMQP_EXCHANGE: aiops.exchange
+      WORKFLOW_STATE_PATH: /state/workflow.sqlite3
+      WORKFLOW_LEASE_SECONDS: "1800"
+      WORKFLOW_MAX_ATTEMPTS: "3"
+      HYPERVISOR_POLL_SECONDS: "30"
+    volumes:
+      - workflow_state:/state
+    command: ["python", "-u", "-m", "app.hypervisor"]
+    networks:
+      - aiops
+
+  gitlab-adapter:
+    build:
+      context: ./services/gitlab-adapter
+      dockerfile: Dockerfile
+    container_name: gitlab-adapter
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      workflow-orchestrator:
+        condition: service_started
+    environment:
+      TZ: Europe/Moscow
+      AMQP_URL: ${GITLAB_ADAPTER_AMQP_URL:-amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/}
+      AMQP_EXCHANGE: aiops.exchange
+      GITLAB_ADAPTER_MODE: stub
+      GITLAB_STUB_APPROVERS: developer-reviewer,tester
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
     networks:
       - aiops
 
@@ -199,12 +296,184 @@ services:
 
     environment:
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
+      PIKOBOT_EXPECTED_ROLE: devops
+      PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.devops.requests
+      PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.devops.requests
+      PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
       - ./pikobot-config:/root/.pikobot
+      - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
     networks:
       - aiops
+
+  agent-analyst:
+    build: {context: ./services/pikobot, dockerfile: Dockerfile}
+    container_name: agent-analyst
+    restart: unless-stopped
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      PIKOBOT_WORKSPACE: /root/.pikobot/workspace
+      PIKOBOT_EXPECTED_ROLE: analyst
+      PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.analyst.requests
+      PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.analyst.requests
+      PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
+    volumes:
+      - ./pikobot-config:/root/.pikobot
+      - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
+      - ./services/pikobot:/app
+    command: ["gateway"]
+    networks: [aiops]
+
+  agent-analyst-reviewer:
+    build: {context: ./services/pikobot, dockerfile: Dockerfile}
+    container_name: agent-analyst-reviewer
+    restart: unless-stopped
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      PIKOBOT_WORKSPACE: /root/.pikobot/workspace
+      PIKOBOT_EXPECTED_ROLE: analyst-reviewer
+      PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.analyst-reviewer.requests
+      PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.analyst-reviewer.requests
+      PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
+    volumes:
+      - ./pikobot-config:/root/.pikobot
+      - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
+      - ./services/pikobot:/app
+    command: ["gateway"]
+    networks: [aiops]
+
+  agent-developer:
+    build: {context: ./services/pikobot, dockerfile: Dockerfile}
+    container_name: agent-developer
+    restart: unless-stopped
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      PIKOBOT_WORKSPACE: /root/.pikobot/workspace
+      PIKOBOT_EXPECTED_ROLE: developer
+      PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.developer.requests
+      PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.developer.requests
+      PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
+    volumes:
+      - ./pikobot-config:/root/.pikobot
+      - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
+      - ./services/pikobot:/app
+    command: ["gateway"]
+    networks: [aiops]
+
+  agent-backend-developer:
+    build: {context: ./services/pikobot, dockerfile: Dockerfile}
+    container_name: agent-backend-developer
+    restart: unless-stopped
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      PIKOBOT_WORKSPACE: /root/.pikobot/workspace
+      PIKOBOT_EXPECTED_ROLE: backend-developer
+      PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.backend-developer.requests
+      PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.backend-developer.requests
+      PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
+    volumes:
+      - ./pikobot-config:/root/.pikobot
+      - ${AGENT_BACKEND_WORKSPACE_PATH:-./agent-workspaces/backend-developer}:/root/.pikobot/workspace
+      - ./services/pikobot:/app
+    command: ["gateway"]
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    networks: [aiops]
+
+  agent-frontend-developer:
+    build: {context: ./services/pikobot, dockerfile: Dockerfile}
+    container_name: agent-frontend-developer
+    restart: unless-stopped
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      PIKOBOT_WORKSPACE: /root/.pikobot/workspace
+      PIKOBOT_EXPECTED_ROLE: frontend-developer
+      PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.frontend-developer.requests
+      PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.frontend-developer.requests
+      PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
+    volumes:
+      - ./pikobot-config:/root/.pikobot
+      - ${AGENT_FRONTEND_WORKSPACE_PATH:-./agent-workspaces/frontend-developer}:/root/.pikobot/workspace
+      - ./services/pikobot:/app
+    command: ["gateway"]
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    networks: [aiops]
+
+  agent-dba-developer:
+    build: {context: ./services/pikobot, dockerfile: Dockerfile}
+    container_name: agent-dba-developer
+    restart: unless-stopped
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      PIKOBOT_WORKSPACE: /root/.pikobot/workspace
+      PIKOBOT_EXPECTED_ROLE: dba-developer
+      PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.dba-developer.requests
+      PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.dba-developer.requests
+      PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
+    volumes:
+      - ./pikobot-config:/root/.pikobot
+      - ${AGENT_DBA_WORKSPACE_PATH:-./agent-workspaces/dba-developer}:/root/.pikobot/workspace
+      - ./services/pikobot:/app
+    command: ["gateway"]
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    networks: [aiops]
+
+  agent-developer-reviewer:
+    build: {context: ./services/pikobot, dockerfile: Dockerfile}
+    container_name: agent-developer-reviewer
+    restart: unless-stopped
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      PIKOBOT_WORKSPACE: /root/.pikobot/workspace
+      PIKOBOT_EXPECTED_ROLE: developer-reviewer
+      PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.developer-reviewer.requests
+      PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.developer-reviewer.requests
+      PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
+    volumes:
+      - ./pikobot-config:/root/.pikobot
+      - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
+      - ./services/pikobot:/app
+    command: ["gateway"]
+    networks: [aiops]
+
+  agent-tester:
+    build: {context: ./services/pikobot, dockerfile: Dockerfile}
+    container_name: agent-tester
+    restart: unless-stopped
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    environment:
+      PIKOBOT_WORKSPACE: /root/.pikobot/workspace
+      PIKOBOT_EXPECTED_ROLE: tester
+      PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.tester.requests
+      PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.tester.requests
+      PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
+    volumes:
+      - ./pikobot-config:/root/.pikobot
+      - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
+      - ./services/pikobot:/app
+    command: ["gateway"]
+    networks: [aiops]
 
   pikobot-cli:
     build:
@@ -233,3 +502,5 @@ volumes:
   jira_data:
   rabbitmq_data:
   ollama_data:
+  workflow_state:
+  jira_bot_state:
