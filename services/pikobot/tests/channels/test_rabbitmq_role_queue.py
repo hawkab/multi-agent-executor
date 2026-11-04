@@ -3,6 +3,15 @@ import pytest
 from pikobot.channels.rabbitmq import RabbitMQChannel
 
 
+def test_broker_url_can_be_injected_without_credentials_in_config(monkeypatch) -> None:
+    from secrets import token_urlsafe
+
+    broker_url = f"amqp://worker:{token_urlsafe(24)}@rabbitmq:5672/"
+    monkeypatch.setenv("PIKOBOT_RABBITMQ_URL", broker_url)
+    channel = RabbitMQChannel({"url": "amqp://localhost/"}, bus=object())
+    assert channel.config.url == broker_url
+
+
 def test_role_worker_queue_can_be_overridden_by_environment(monkeypatch) -> None:
     monkeypatch.setenv("PIKOBOT_EXPECTED_ROLE", "analyst")
     monkeypatch.setenv("PIKOBOT_RABBITMQ_INBOUND_QUEUE", "agent.analyst.requests")

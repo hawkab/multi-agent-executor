@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any, Literal
 
 import aio_pika
@@ -59,6 +60,9 @@ class RabbitMQChannel(BaseChannel):
 
     def __init__(self, config: Any, bus):
         parsed = RabbitMQChannelConfig.model_validate(config or {})
+        broker_url = os.getenv("NANOBOT_RABBITMQ_URL", "").strip()
+        if broker_url:
+            parsed.url = broker_url
         super().__init__(parsed, bus)
         self.config: RabbitMQChannelConfig
 

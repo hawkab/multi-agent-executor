@@ -52,6 +52,7 @@ OLLAMA_MODEL=qwen2.5:14b
 ## Запуск
 
 ```bash
+python3 scripts/init_env.py
 docker compose up -d jira-db rabbitmq ollama
 docker exec -it ollama ollama pull qwen2.5:14b
 docker compose up -d --build
@@ -110,3 +111,5 @@ docker compose logs -f --tail=200 jira-bot guardian pikobot
 ## Обновлённый durable workflow
 
 Добавлены оркестратор ролей, SQLite-checkpoints, transactional outbox, независимые ревью и восстановление после перезапуска. Разработка backend/frontend/DBA декомпозируется по компонентам и использует общий версионированный API-контракт. Jira bot обрабатывает команды и подтверждает внешние операции; GitLab adapter пока предоставляет детерминированный stub для изолированных проверок. Полные протоколы, настройки и команды тестирования: [актуальный README](README.md).
+
+Пароли PostgreSQL и RabbitMQ создаются командой `python3 scripts/init_env.py` в локальном `.env` с правами `0600`. Существующий файл не перезаписывается. Пароль Jira и токен провайдера задаются только локально; аутентификация RabbitMQ передаётся агентам через `PIKOBOT_RABBITMQ_URL`.

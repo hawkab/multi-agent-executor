@@ -85,8 +85,12 @@ Guardian remains the mandatory security gate. `jira-bot` remains the only compon
 
 ## Configuration
 
-Set these in `.env` or the deployment secret mechanism. Copy `.env.example` to
-`.env` for local overrides. For an authenticated/custom worker endpoint, copy
+Run `python3 scripts/init_env.py` once to create an ignored `.env` with unique
+PostgreSQL and RabbitMQ passwords and owner-only access. An existing `.env` is
+preserved. Set Jira and optional provider credentials in that private file or
+the deployment secret mechanism. Broker authentication is injected into workers
+through `PIKOBOT_RABBITMQ_URL`; configuration templates contain no credentials.
+For an authenticated/custom worker endpoint, copy
 `pikobot-config/config.json` to the ignored `pikobot-config/config.local.json`,
 configure the private copy, and set `PIKOBOT_CONFIG_PATH` to that file. All role
 workers mount the selected configuration; the versioned file stays a template.
@@ -109,7 +113,6 @@ JIRA_USER_DEVOPS=agent-devops
 JIRA_USER_TESTER=agent-tester
 JIRA_DONE_STATUS_NAME=Готово
 JIRA_SUBTASK_TYPE_NAME=Подзадача
-GITLAB_ADAPTER_AMQP_URL=amqp://rabbitmq:5672/
 GITLAB_ADAPTER_MODE=stub
 ALLOW_STUB_TERMINAL_VERIFICATION=false
 ```
@@ -121,6 +124,7 @@ Default `AGENT_WORKSPACE_PATH` is `./agent-workspace`, which contains the safe r
 ## Run
 
 ```bash
+python3 scripts/init_env.py
 ./scripts/redeploy.sh
 ```
 

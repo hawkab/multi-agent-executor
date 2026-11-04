@@ -26,11 +26,20 @@ cleanup() {
 trap cleanup EXIT
 
 docker exec rabbitmq rabbitmq-diagnostics -q ping >/dev/null
+export AMQP_URL="$(docker inspect rabbitmq | python3 -c '
+import json, sys
+from urllib.parse import quote
+environment = dict(item.split("=", 1) for item in json.load(sys.stdin)[0]["Config"]["Env"])
+user = quote(environment["RABBITMQ_DEFAULT_USER"], safe="")
+password = quote(environment["RABBITMQ_DEFAULT_PASS"], safe="")
+vhost = quote(sys.argv[1], safe="")
+print(f"amqp://{user}:{password}@rabbitmq:5672/{vhost}")
+' "$vhost")"
 docker exec rabbitmq rabbitmqctl add_vhost "$vhost" >/dev/null
 docker exec rabbitmq rabbitmqctl set_permissions -p "$vhost" aiops '.*' '.*' '.*' >/dev/null
 
 docker run -d --name "$workflow" --network "$network" \
-  -e AMQP_URL="amqp://rabbitmq:5672/${vhost}" \
+  -e AMQP_URL \
   -e AMQP_EXCHANGE=aiops.exchange \
   -e WORKFLOW_STATE_PATH=/state/workflow.sqlite3 \
   -e WORKFLOW_LEASE_SECONDS=60 \
@@ -46,9 +55,9 @@ for _ in $(seq 1 20); do
 done
 test -f "$state_dir/workflow.ready"
 
-docker run --rm --network "$network" --entrypoint python \
+docker run --rm --network "$network" --env AMQP_URL --entrypoint python \
   multi-agent-executor-workflow-orchestrator -c \
-  "import json,pika; c=pika.BlockingConnection(pika.URLParameters('amqp://rabbitmq:5672/${vhost}')); ch=c.channel(); ch.basic_publish(exchange='aiops.exchange',routing_key='workflow.requests',body=json.dumps({'issue_key':'E2E-1','summary':'Synthetic','description':'Build exactly X','correlationId':'e2e-request-1'}).encode(),properties=pika.BasicProperties(delivery_mode=2)); c.close()"
+  "import json,os,pika; c=pika.BlockingConnection(pika.URLParameters(os.environ['AMQP_URL'])); ch=c.channel(); ch.basic_publish(exchange='aiops.exchange',routing_key='workflow.requests',body=json.dumps({'issue_key':'E2E-1','summary':'Synthetic','description':'Build exactly X','correlationId':'e2e-request-1'}).encode(),properties=pika.BasicProperties(delivery_mode=2)); c.close()"
 
 for _ in $(seq 1 20); do
   count="$(docker exec rabbitmq rabbitmqctl list_queues -p "$vhost" -q name messages | awk '$1=="agent.analyst.requests" {print $2}')"

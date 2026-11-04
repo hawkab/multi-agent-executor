@@ -295,13 +295,14 @@ services:
       - "18790:18790"
 
     environment:
+      PIKOBOT_RABBITMQ_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
       PIKOBOT_EXPECTED_ROLE: devops
       PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.devops.requests
       PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.devops.requests
       PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
       - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
@@ -315,13 +316,14 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
     environment:
+      PIKOBOT_RABBITMQ_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
       PIKOBOT_EXPECTED_ROLE: analyst
       PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.analyst.requests
       PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.analyst.requests
       PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
       - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
@@ -334,13 +336,14 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
     environment:
+      PIKOBOT_RABBITMQ_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
       PIKOBOT_EXPECTED_ROLE: analyst-reviewer
       PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.analyst-reviewer.requests
       PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.analyst-reviewer.requests
       PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
       - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
@@ -353,13 +356,14 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
     environment:
+      PIKOBOT_RABBITMQ_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
       PIKOBOT_EXPECTED_ROLE: developer
       PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.developer.requests
       PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.developer.requests
       PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
       - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
@@ -372,13 +376,14 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
     environment:
+      PIKOBOT_RABBITMQ_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
       PIKOBOT_EXPECTED_ROLE: backend-developer
       PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.backend-developer.requests
       PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.backend-developer.requests
       PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
       - ${AGENT_BACKEND_WORKSPACE_PATH:-./agent-workspaces/backend-developer}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
@@ -396,13 +401,14 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
     environment:
+      PIKOBOT_RABBITMQ_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
       PIKOBOT_EXPECTED_ROLE: frontend-developer
       PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.frontend-developer.requests
       PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.frontend-developer.requests
       PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
       - ${AGENT_FRONTEND_WORKSPACE_PATH:-./agent-workspaces/frontend-developer}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
@@ -420,13 +426,14 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
     environment:
+      PIKOBOT_RABBITMQ_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
       PIKOBOT_EXPECTED_ROLE: dba-developer
       PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.dba-developer.requests
       PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.dba-developer.requests
       PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
       - ${AGENT_DBA_WORKSPACE_PATH:-./agent-workspaces/dba-developer}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
@@ -444,13 +451,14 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
     environment:
+      PIKOBOT_RABBITMQ_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
       PIKOBOT_EXPECTED_ROLE: developer-reviewer
       PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.developer-reviewer.requests
       PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.developer-reviewer.requests
       PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
       - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
@@ -463,13 +471,14 @@ services:
     depends_on:
       rabbitmq: {condition: service_healthy}
     environment:
+      PIKOBOT_RABBITMQ_URL: amqp://aiops:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
       PIKOBOT_WORKSPACE: /root/.pikobot/workspace
       PIKOBOT_EXPECTED_ROLE: tester
       PIKOBOT_RABBITMQ_INBOUND_QUEUE: agent.tester.requests
       PIKOBOT_RABBITMQ_INBOUND_ROUTING_KEY: agent.tester.requests
       PIKOBOT_MAX_CONCURRENT_REQUESTS: "1"
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
       - ${AGENT_WORKSPACE_PATH:-./agent-workspace}:/root/.pikobot/workspace
       - ./services/pikobot:/app
     command: ["gateway"]
@@ -489,7 +498,7 @@ services:
     stdin_open: true
     tty: true
     volumes:
-      - ./pikobot-config:/root/.pikobot
+      - ${PIKOBOT_CONFIG_PATH:-./pikobot-config/config.json}:/root/.pikobot/config.json:ro
     networks:
       - aiops
 

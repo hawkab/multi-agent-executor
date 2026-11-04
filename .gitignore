@@ -1,4 +1,6 @@
 agent-workspaces/
+plans/
+/PLAN.md
 .env
 .env.*
 !.env.example
